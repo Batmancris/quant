@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>电力股多因子量化静态看板</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    :root {
+      --bg: #f4f1ea;
+      --panel: rgba(255,255,255,0.82);
+      --ink: #16221b;
+      --muted: #617065;
+      --accent: #1f7a53;
+      --accent-2: #c07b2a;
+      --line: rgba(22,34,27,0.12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(31,122,83,0.16), transparent 30%),
+        radial-gradient(circle at top right, rgba(192,123,42,0.14), transparent 28%),
+        linear-gradient(180deg, #f9f6ef 0%, var(--bg) 100%);
+    }
+    .wrap { max-width: 1280px; margin: 0 auto; padding: 28px 18px 56px; }
+    .hero {
+      padding: 28px;
+      border-radius: 28px;
+      color: #f7fffb;
+      background: linear-gradient(135deg, rgba(31,122,83,0.95), rgba(15,65,45,0.95));
+      box-shadow: 0 20px 60px rgba(22,34,27,0.16);
+    }
+    .hero h1 { margin: 0 0 10px; font-size: clamp(28px, 4vw, 48px); }
+    .hero p { margin: 0; color: rgba(247,255,251,0.84); line-height: 1.6; }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+    .card, .panel {
+      background: var(--panel);
+      border-radius: 22px;
+      padding: 18px;
+      border: 1px solid rgba(255,255,255,0.48);
+      backdrop-filter: blur(14px);
+      box-shadow: 0 18px 40px rgba(22,34,27,0.08);
+    }
+    .card .label { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+    .card .value { font-size: 24px; font-weight: 700; }
+    .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; margin-top: 16px; }
+    .span-6 { grid-column: span 6; }
+    .span-12 { grid-column: span 12; }
+    .panel h2 { margin-top: 0; font-size: 18px; }
+    .pill {
+      display: inline-block;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(31,122,83,0.12);
+      color: var(--accent);
+      font-size: 13px;
+      margin-right: 8px;
+      margin-bottom: 8px;
+    }
+    .table-wrap { overflow: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid var(--line); text-align: left; font-size: 14px; }
+    th { color: var(--muted); font-weight: 600; }
+    .footer { color: var(--muted); font-size: 13px; margin-top: 24px; }
+    @media (max-width: 900px) { .span-6 { grid-column: span 12; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>电力股多因子量化静态看板</h1>
+      <p id="hero-text">正在加载最近一次策略回测快照。</p>
+      <div class="cards" id="summary-cards"></div>
+    </section>
+
+    <section class="grid">
+      <div class="panel span-6">
+        <h2>策略净值与基准</h2>
+        <div id="backtest-chart"></div>
+      </div>
+      <div class="panel span-6">
+        <h2>因子累计平均 IC</h2>
+        <div id="ic-chart"></div>
+      </div>
+      <div class="panel span-6">
+        <h2>目标股价格与成交量</h2>
+        <div id="price-chart"></div>
+      </div>
+      <div class="panel span-6">
+        <h2>当前建议持仓</h2>
+        <div id="holding-pills"></div>
+      </div>
+      <div class="panel span-6">
+        <h2>回测指标</h2>
+        <div class="cards" id="metric-cards"></div>
+      </div>
+      <div class="panel span-6">
+        <h2>因子权重</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>因子</th><th>平均IC</th><th>ICIR</th><th>权重</th></tr>
+            </thead>
+            <tbody id="factor-weight-rows"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel span-12">
+        <h2>最近调仓记录</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>信号日</th>
+                <th>持有开始</th>
+                <th>持有结束</th>
+                <th>持仓</th>
+                <th>换手</th>
+                <th>成本</th>
+              </tr>
+            </thead>
+            <tbody id="rebalance-rows"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer" id="footer"></div>
+  </div>
+
+  <script>
+    const money = (v) => Number(v).toFixed(3);
+    const pct = (v) => `${(Number(v) * 100).toFixed(2)}%`;
+
+    const renderCards = (el, rows) => {
+      el.innerHTML = rows.map((row) => `
+        <div class="card">
+          <div class="label">${row.label}</div>
+          <div class="value">${row.value}</div>
+        </div>
+      `).join("");
+    };
+
+    fetch("./site-data.json")
+      .then((res) => res.json())
+      .then((data) => {
+        const summary = data.summary;
+        const metrics = data.metrics;
+        document.getElementById("hero-text").textContent = summary.status_message;
+
+        renderCards(document.getElementById("summary-cards"), [
+          { label: "策略ID", value: summary.strategy_id },
+          { label: "最新交易日", value: summary.latest_trade_date },
+          { label: "训练截止日", value: summary.train_end_date },
+          { label: "持有周期", value: `${summary.holding_period_days}日` },
+          { label: "调仓周期", value: `${summary.rebalance_frequency_days}日` },
+          { label: "持仓数量", value: `${summary.top_k}只` },
+        ]);
+
+        renderCards(document.getElementById("metric-cards"), [
+          { label: "年化收益", value: pct(metrics.annualized_return) },
+          { label: "超额收益", value: pct(metrics.excess_return) },
+          { label: "最大回撤", value: pct(metrics.max_drawdown) },
+          { label: "Sharpe", value: money(metrics.sharpe) },
+          { label: "信息比率", value: money(metrics.information_ratio) },
+          { label: "平均换手", value: money(metrics.average_turnover) },
+        ]);
+
+        Plotly.newPlot("backtest-chart", [
+          { x: data.backtest_daily.map((row) => row.date), y: data.backtest_daily.map((row) => row.strategy_curve), mode: "lines", name: "策略净值", line: { color: "#1f7a53", width: 2 } },
+          { x: data.backtest_daily.map((row) => row.date), y: data.backtest_daily.map((row) => row.benchmark_curve), mode: "lines", name: "等权基准", line: { color: "#c07b2a", width: 2 } },
+          { x: data.backtest_daily.map((row) => row.date), y: data.backtest_daily.map((row) => row.excess_curve), mode: "lines", name: "超额曲线", line: { color: "#38536b", width: 2 } },
+        ], {
+          margin: { t: 10, l: 40, r: 20, b: 35 },
+          paper_bgcolor: "rgba(0,0,0,0)",
+          plot_bgcolor: "rgba(0,0,0,0)",
+        }, { displayModeBar: false, responsive: true });
+
+        const icByFactor = {};
+        data.factor_ic_history.forEach((row) => {
+          if (!icByFactor[row.factor]) icByFactor[row.factor] = { x: [], y: [] };
+          icByFactor[row.factor].x.push(row.date);
+          icByFactor[row.factor].y.push(row.cum_mean_ic);
+        });
+        Plotly.newPlot("ic-chart", Object.entries(icByFactor).map(([factor, values]) => ({
+          x: values.x, y: values.y, mode: "lines", name: factor,
+        })), {
+          margin: { t: 10, l: 40, r: 20, b: 35 },
+          paper_bgcolor: "rgba(0,0,0,0)",
+          plot_bgcolor: "rgba(0,0,0,0)",
+        }, { displayModeBar: false, responsive: true });
+
+        const priceX = data.price_history.map((row) => row.date);
+        Plotly.newPlot("price-chart", [
+          { x: priceX, y: data.price_history.map((row) => row.close), mode: "lines", name: "收盘价", line: { color: "#1f7a53", width: 2 } },
+          { x: priceX, y: data.price_history.map((row) => row.volume), type: "bar", yaxis: "y2", name: "成交量", marker: { color: "rgba(192,123,42,0.42)" } },
+        ], {
+          margin: { t: 10, l: 40, r: 40, b: 35 },
+          paper_bgcolor: "rgba(0,0,0,0)",
+          plot_bgcolor: "rgba(0,0,0,0)",
+          legend: { orientation: "h" },
+          yaxis2: { overlaying: "y", side: "right", showgrid: false },
+        }, { displayModeBar: false, responsive: true });
+
+        document.getElementById("holding-pills").innerHTML = data.latest_portfolio
+          .map((row) => `<span class="pill">${row.symbol} ${row.name} | score=${Number(row.score).toFixed(3)}</span>`)
+          .join("");
+
+        document.getElementById("factor-weight-rows").innerHTML = data.factor_weights
+          .map((row) => `
+            <tr>
+              <td>${row.factor_label}</td>
+              <td>${money(row.mean_ic)}</td>
+              <td>${money(row.ic_ir)}</td>
+              <td>${money(row.weight)}</td>
+            </tr>
+          `)
+          .join("");
+
+        document.getElementById("rebalance-rows").innerHTML = data.rebalance_log
+          .map((row) => `
+            <tr>
+              <td>${row.signal_date}</td>
+              <td>${row.hold_start_date}</td>
+              <td>${row.hold_end_date}</td>
+              <td>${row.holdings}</td>
+              <td>${money(row.turnover)}</td>
+              <td>${pct(row.trading_cost)}</td>
+            </tr>
+          `)
+          .join("");
+
+        document.getElementById("footer").textContent = `最近导出时间：${new Date().toLocaleString()} | 这是静态快照，重新训练后会覆盖 docs/site-data.json。`;
+      })
+      .catch((error) => {
+        document.getElementById("hero-text").textContent = `站点数据加载失败：${error}`;
+      });
+  </script>
+</body>
+</html>

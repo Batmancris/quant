@@ -1,0 +1,10 @@
+﻿.venv/
+__pycache__/
+*.pyc
+.streamlit/
+.tools/
+.vscode/
+cache/
+artifacts/
+docs/site-data.json
+test.py
