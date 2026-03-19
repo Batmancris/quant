@@ -150,7 +150,12 @@
     };
 
     fetch("./site-data.json")
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: site-data.json not found`);
+        }
+        return res.json();
+      })
       .then((data) => {
         const summary = data.summary;
         const metrics = data.metrics;
@@ -241,7 +246,7 @@
         document.getElementById("footer").textContent = `最近导出时间：${new Date().toLocaleString()} | 这是静态快照，重新训练后会覆盖 docs/site-data.json。`;
       })
       .catch((error) => {
-        document.getElementById("hero-text").textContent = `站点数据加载失败：${error}`;
+        document.getElementById("hero-text").textContent = `站点数据加载失败：${error.message}`;
       });
   </script>
 </body>
