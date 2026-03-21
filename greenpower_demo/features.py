@@ -37,19 +37,30 @@ FEATURE_COLUMNS = [
     "hs300_return_1",
     "hs300_return_5",
     "hs300_volatility_10",
-    "power_return_1",
-    "power_return_5",
-    "power_volatility_10",
-    "power_up_ratio",
-    "power_limit_up_ratio",
-    "power_volume_change_1",
-    "power_turnover_change_1",
+    "universe_return_1",
+    "universe_return_5",
+    "universe_volatility_10",
+    "universe_up_ratio",
+    "universe_limit_up_ratio",
+    "universe_volume_change_1",
+    "universe_turnover_change_1",
     "north_net_deal",
     "north_net_deal_5",
     "north_inflow",
     "north_inflow_5",
     "north_cumulative",
     "north_cumulative_change_5",
+    "roe",
+    "operating_cashflow_per_share",
+    "cashflow_quality",
+    "gross_margin",
+    "eps",
+    "bvps",
+    "dividend_per_share",
+    "dividend_yield",
+    "pe_ratio",
+    "pb_ratio",
+    "market_cap_est",
     "market_same_direction",
 ]
 
@@ -113,6 +124,81 @@ def _prepare_northbound_features(frame: pd.DataFrame) -> pd.DataFrame:
     return prepared
 
 
+def _merge_fundamental_history(stock: pd.DataFrame, history: pd.DataFrame, symbol: str, industry_fallback: str) -> pd.DataFrame:
+    if history.empty:
+        stock["industry"] = industry_fallback
+        for column in [
+            "roe",
+            "operating_cashflow_per_share",
+            "cashflow_quality",
+            "gross_margin",
+            "eps",
+            "bvps",
+            "fundamental_asof_date",
+            "report_date",
+        ]:
+            stock[column] = np.nan
+        return stock
+
+    subset = history.loc[history["symbol"] == symbol].copy().sort_values("fundamental_asof_date")
+    if subset.empty:
+        stock["industry"] = industry_fallback
+        for column in [
+            "roe",
+            "operating_cashflow_per_share",
+            "cashflow_quality",
+            "gross_margin",
+            "eps",
+            "bvps",
+            "fundamental_asof_date",
+            "report_date",
+        ]:
+            stock[column] = np.nan
+        return stock
+
+    merged = pd.merge_asof(
+        stock.sort_values("date"),
+        subset[
+            [
+                "fundamental_asof_date",
+                "report_date",
+                "industry",
+                "roe",
+                "operating_cashflow_per_share",
+                "cashflow_quality",
+                "gross_margin",
+                "eps",
+                "bvps",
+            ]
+        ].sort_values("fundamental_asof_date"),
+        left_on="date",
+        right_on="fundamental_asof_date",
+        direction="backward",
+    )
+    merged["industry"] = merged["industry"].fillna(industry_fallback)
+    return merged
+
+
+def _merge_dividend_history(stock: pd.DataFrame, history: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    if history.empty:
+        stock["dividend_announce_date"] = pd.NaT
+        stock["dividend_per_share"] = np.nan
+        return stock
+    subset = history.loc[history["symbol"] == symbol].copy().sort_values("dividend_announce_date")
+    if subset.empty:
+        stock["dividend_announce_date"] = pd.NaT
+        stock["dividend_per_share"] = np.nan
+        return stock
+    merged = pd.merge_asof(
+        stock.sort_values("date"),
+        subset[["dividend_announce_date", "dividend_per_share"]].sort_values("dividend_announce_date"),
+        left_on="date",
+        right_on="dividend_announce_date",
+        direction="backward",
+    )
+    return merged
+
+
 def build_features(
     df_stock: pd.DataFrame,
     df_indices: dict[str, pd.DataFrame],
@@ -120,6 +206,9 @@ def build_features(
     northbound_frame: pd.DataFrame,
     config: TrainingConfig,
     symbol: str = DEFAULT_SYMBOL,
+    industry_fallback: str = "未知行业",
+    fundamental_history: pd.DataFrame | None = None,
+    dividend_history: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     stock = df_stock.copy()
     stock["date"] = pd.to_datetime(stock["date"])
@@ -145,11 +234,20 @@ def build_features(
     stock["bollinger_position"] = _compute_bollinger_position(stock["close"], window=20)
     stock["limit_up_flag"] = (stock["pct_change"] >= 9.5).astype(float)
     stock["limit_down_flag"] = (stock["pct_change"] <= -9.5).astype(float)
+    stock["market_cap_est"] = stock["amount"] / (stock["turnover_rate"] / 100.0).replace(0, np.nan)
+
+    stock = _merge_fundamental_history(stock, fundamental_history if fundamental_history is not None else pd.DataFrame(), symbol=symbol, industry_fallback=industry_fallback)
+    stock = _merge_dividend_history(stock, dividend_history if dividend_history is not None else pd.DataFrame(), symbol=symbol)
+
+    stock["dividend_yield"] = stock["dividend_per_share"] / stock["close"].replace(0, np.nan)
+    stock["pe_ratio"] = stock["close"] / stock["eps"].replace(0, np.nan)
+    stock["pb_ratio"] = stock["close"] / stock["bvps"].replace(0, np.nan)
 
     merged = stock[
         [
             "date",
             "symbol",
+            "industry",
             "open",
             "close",
             "high",
@@ -179,6 +277,20 @@ def build_features(
             "bollinger_position",
             "limit_up_flag",
             "limit_down_flag",
+            "roe",
+            "operating_cashflow_per_share",
+            "cashflow_quality",
+            "gross_margin",
+            "eps",
+            "bvps",
+            "dividend_per_share",
+            "dividend_yield",
+            "pe_ratio",
+            "pb_ratio",
+            "market_cap_est",
+            "report_date",
+            "fundamental_asof_date",
+            "dividend_announce_date",
         ]
     ].copy()
 
@@ -188,6 +300,7 @@ def build_features(
 
     merged = merged.merge(industry_proxy.copy(), on="date", how="left")
     merged = merged.merge(_prepare_northbound_features(northbound_frame.copy()), on="date", how="left")
+
     northbound_columns = [
         "north_net_deal",
         "north_net_deal_5",
@@ -211,6 +324,19 @@ def build_features(
     )
 
     merged = merged.replace([np.inf, -np.inf], np.nan)
-    merged = merged.dropna(subset=FEATURE_COLUMNS).reset_index(drop=True)
+    merged = merged.dropna(subset=["stock_return_1", "stock_return_5", "sse_return_1", "hs300_return_1", "universe_return_1"])
+    merged["industry"] = merged["industry"].fillna(industry_fallback)
+    merged["market_cap_est"] = merged["market_cap_est"].ffill()
+    merged["roe"] = merged["roe"].ffill()
+    merged["cashflow_quality"] = merged["cashflow_quality"].ffill()
+    merged["gross_margin"] = merged["gross_margin"].ffill()
+    merged["eps"] = merged["eps"].ffill()
+    merged["bvps"] = merged["bvps"].ffill()
+    merged["dividend_per_share"] = merged["dividend_per_share"].ffill()
+    merged["dividend_yield"] = merged["dividend_yield"].fillna(0.0)
+    merged["pe_ratio"] = merged["pe_ratio"].replace([np.inf, -np.inf], np.nan)
+    merged["pb_ratio"] = merged["pb_ratio"].replace([np.inf, -np.inf], np.nan)
+    merged = merged.dropna(subset=["market_cap_est"])
     merged["date"] = pd.to_datetime(merged["date"])
-    return merged, FEATURE_COLUMNS.copy()
+    return merged.reset_index(drop=True), FEATURE_COLUMNS.copy()
+

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from datetime import date, datetime
@@ -41,13 +41,14 @@ def export_static_site(dashboard: dict[str, Any]) -> str:
         "backtest_daily": dashboard["backtest_daily"].sort_values("date").to_dict(orient="records"),
         "factor_ic_history": dashboard["factor_ic_history"].to_dict(orient="records"),
         "factor_weights": dashboard["factor_weights"].to_dict(orient="records"),
-        "rebalance_log": dashboard["rebalance_log"].sort_values("signal_date", ascending=False).head(60).to_dict(orient="records"),
+        "rebalance_log": dashboard["rebalance_log"].sort_values("signal_date", ascending=False).head(80).to_dict(orient="records"),
         "latest_portfolio": latest_portfolio.to_dict(orient="records"),
         "stock_pool": summary.get("stock_pool", []),
         "artifact_dir": dashboard["artifact_dir"],
+        "fold_metrics": dashboard.get("fold_metrics", pd.DataFrame()).to_dict(orient="records"),
+        "simulation_account": dashboard.get("simulation_account", {}),
+        "trade_plan": dashboard.get("trade_plan", []),
+        "ai_trade_context": dashboard.get("ai_trade_context", {}),
     }
-    STATIC_SITE_DATA_PATH.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default),
-        encoding="utf-8",
-    )
+    STATIC_SITE_DATA_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
     return str(STATIC_SITE_DATA_PATH)
